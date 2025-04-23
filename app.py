@@ -6,32 +6,33 @@ from tempfile import NamedTemporaryFile
 import os
 import uuid
 from io import BytesIO
-import base64
+from streamlit_mic_recorder import mic_recorder
 
-# Set your OpenAI API key (recommended to use st.secrets in deployment)
-openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else "YOUR_API_KEY_HERE"
+# Set your OpenAI API key securely
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# Title
 st.set_page_config(page_title="Malayalam Voice Chatbot")
 st.title("🗣️ Malayalam Voice Chatbot with ChatGPT")
-st.markdown("Speak in Malayalam and get intelligent replies spoken back to you!")
+st.markdown("Speak directly using your mic in Malayalam — and get intelligent replies spoken back to you!")
 
-# Audio Recorder (using browser microphone)
-with st.expander("🎤 Record Your Question"):
-    audio_file = st.file_uploader("Upload a .wav audio in Malayalam", type=["wav"])
+# Record voice directly from browser
+wav_audio = mic_recorder(start_prompt="🎙️ Click to Speak in Malayalam", stop_prompt="🛑 Stop Recording", key="recorder")
 
 # Transcribe Malayalam audio
-def transcribe_audio(file):
+def transcribe_audio_bytes(audio_bytes):
     recognizer = sr.Recognizer()
-    with sr.AudioFile(file) as source:
-        audio_data = recognizer.record(source)
-        try:
-            text = recognizer.recognize_google(audio_data, language="ml-IN")
-            return text
-        except sr.UnknownValueError:
-            return "ക്ഷമിക്കണം, ശബ്ദം മനസ്സിലായില്ല."
-        except Exception as e:
-            return f"തെറ്റായിരിക്കുന്നു: {str(e)}"
+    with NamedTemporaryFile(delete=False, suffix=".wav") as f:
+        f.write(audio_bytes)
+        f.flush()
+        with sr.AudioFile(f.name) as source:
+            audio_data = recognizer.record(source)
+            try:
+                text = recognizer.recognize_google(audio_data, language="ml-IN")
+                return text
+            except sr.UnknownValueError:
+                return "ക്ഷമിക്കണം, ശബ്ദം മനസ്സിലായില്ല."
+            except Exception as e:
+                return f"തെറ്റായിരിക്കുന്നു: {str(e)}"
 
 # Get response from OpenAI
 @st.cache_data(show_spinner=False)
@@ -42,20 +43,17 @@ def get_gpt_reply(text):
     )
     return response.choices[0].message.content.strip()
 
-# Convert text to Malayalam audio using gTTS
+# Speak Malayalam using gTTS
 def speak_text(text):
     tts = gTTS(text=text, lang='ml')
     with NamedTemporaryFile(delete=False, suffix=".mp3") as f:
         tts.save(f.name)
         return f.name
 
-# Process input and respond
-if audio_file is not None:
-    st.info("🔍 Transcribing your Malayalam audio...")
-    with open("temp_audio.wav", "wb") as f:
-        f.write(audio_file.read())
-
-    query_text = transcribe_audio("temp_audio.wav")
+# Main logic
+if wav_audio is not None:
+    st.success("✅ Voice recorded successfully!")
+    query_text = transcribe_audio_bytes(wav_audio)
     st.markdown(f"**🗣️ You said:** {query_text}")
 
     if query_text and "ക്ഷമിക്കണം" not in query_text:
@@ -70,5 +68,3 @@ if audio_file is not None:
 
         audio_file.close()
         os.remove(mp3_path)
-
-    os.remove("temp_audio.wav")
