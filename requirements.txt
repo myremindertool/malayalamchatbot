@@ -1,5 +1,6 @@
 streamlit
 openai
 SpeechRecognition
-streamlit-mic-recorder
 gTTS
+pydub
+streamlit-mic-recorder
