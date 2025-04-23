@@ -7,6 +7,7 @@ import os
 import uuid
 from io import BytesIO
 from streamlit_mic_recorder import mic_recorder
+import base64
 
 # Set your OpenAI API key securely
 openai.api_key = st.secrets["OPENAI_API_KEY"]
@@ -18,9 +19,14 @@ st.markdown("Speak directly using your mic in Malayalam — and get intelligent 
 # Record voice directly from browser
 wav_audio = mic_recorder(start_prompt="🎙️ Click to Speak in Malayalam", stop_prompt="🛑 Stop Recording", key="recorder")
 
-# Transcribe Malayalam audio
-def transcribe_audio_bytes(audio_bytes):
+# Transcribe Malayalam audio from recorded bytes
+def transcribe_audio_bytes(audio_dict):
     recognizer = sr.Recognizer()
+    audio_bytes = audio_dict["bytes"] if isinstance(audio_dict, dict) and "bytes" in audio_dict else None
+
+    if not audio_bytes:
+        return "⚠️ ശബ്ദം ലഭ്യമല്ല."
+
     with NamedTemporaryFile(delete=False, suffix=".wav") as f:
         f.write(audio_bytes)
         f.flush()
