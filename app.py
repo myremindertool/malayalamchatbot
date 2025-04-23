@@ -7,61 +7,57 @@ import os
 import uuid
 from io import BytesIO
 from pydub import AudioSegment
-import base64
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
+import av
+import numpy as np
 
 # Set your OpenAI API key securely
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.set_page_config(page_title="Malayalam Voice Chatbot")
 st.title("🗣️ Malayalam Voice Chatbot with ChatGPT")
-st.markdown("Malayalam AI voice assistant — starts listening automatically. Speak now!")
+st.markdown("Speak freely in Malayalam. This assistant listens live and replies back with voice!")
 
-# Inject JavaScript to auto-record on load
-st.markdown("""
-    <script>
-    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-        const mediaRecorder = new MediaRecorder(stream);
-        let chunks = [];
-        mediaRecorder.ondataavailable = e => chunks.push(e.data);
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(chunks, { 'type': 'audio/webm' });
-            const reader = new FileReader();
-            reader.readAsDataURL(blob);
-            reader.onloadend = function() {
-                const base64data = reader.result;
-                fetch("/upload_audio", {
-                    method: "POST",
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ audio: base64data })
-                });
-            };
-        };
-        mediaRecorder.start();
-        setTimeout(() => mediaRecorder.stop(), 5000);  // record for 5 seconds
-    });
-    </script>
-""", unsafe_allow_html=True)
+class AudioProcessor(AudioProcessorBase):
+    def __init__(self):
+        self.buffer = b""
 
-# Placeholder to simulate audio received (Streamlit Cloud does not support JS post handlers)
-st.info("👂 Listening for Malayalam audio... (simulate in local test only)")
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        # Convert audio frame to bytes and accumulate
+        pcm = frame.to_ndarray().tobytes()
+        self.buffer += pcm
+        return frame
 
-# Transcribe Malayalam audio from raw bytes
-def transcribe_audio_bytes(audio_bytes):
+# Start WebRTC stream for mic input
+ctx = webrtc_streamer(
+    key="live-audio",
+    mode=WebRtcMode.SENDONLY,
+    in_audio=True,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    audio_processor_factory=AudioProcessor,
+)
+
+# Helper to transcribe audio using SpeechRecognition
+@st.cache_data(show_spinner=False)
+def transcribe_audio(buffer):
     recognizer = sr.Recognizer()
+    temp_file = NamedTemporaryFile(delete=False, suffix=".wav")
+    temp_file.write(buffer)
+    temp_file.flush()
     try:
-        audio_segment = AudioSegment.from_file(BytesIO(audio_bytes), format="webm")
-        with NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            audio_segment.export(f.name, format="wav")
-            with sr.AudioFile(f.name) as source:
-                audio_data = recognizer.record(source)
-                text = recognizer.recognize_google(audio_data, language="ml-IN")
-                return text
+        with sr.AudioFile(temp_file.name) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data, language="ml-IN")
+            return text
     except sr.UnknownValueError:
         return "ക്ഷമിക്കണം, ശബ്ദം മനസ്സിലായില്ല."
     except Exception as e:
         return f"❌ പ്രശ്നം: {str(e)}"
+    finally:
+        temp_file.close()
+        os.remove(temp_file.name)
 
-# Get response from OpenAI
+# Get response from ChatGPT
 @st.cache_data(show_spinner=False)
 def get_gpt_reply(text):
     response = openai.ChatCompletion.create(
@@ -70,23 +66,27 @@ def get_gpt_reply(text):
     )
     return response.choices[0].message.content.strip()
 
-# Speak Malayalam using gTTS
+# Speak using gTTS
 def speak_text(text):
     tts = gTTS(text=text, lang='ml')
     with NamedTemporaryFile(delete=False, suffix=".mp3") as f:
         tts.save(f.name)
         return f.name
 
-# Placeholder for uploaded audio simulation
-# In real use, integrate server endpoint or simulate with local test audio
-if False:  # Replace with True for local simulation
-    with open("sample.webm", "rb") as f:
-        raw_audio = f.read()
-    query_text = transcribe_audio_bytes(raw_audio)
+# Check if live audio stream is active and has enough data
+if ctx and ctx.audio_processor and len(ctx.audio_processor.buffer) > 16000 * 3:  # ~3 seconds
+    st.success("✅ Audio captured successfully")
+    st.info("🎧 Processing your Malayalam question...")
+    query_text = transcribe_audio(ctx.audio_processor.buffer)
     st.markdown(f"**🗣️ You said:** {query_text}")
+
     if query_text and "ക്ഷമിക്കണം" not in query_text:
-        answer = get_gpt_reply(query_text)
+        with st.spinner("🤖 ChatGPT is thinking..."):
+            answer = get_gpt_reply(query_text)
         st.markdown(f"**🤖 Answer:** {answer}")
+
         mp3_path = speak_text(answer)
-        st.audio(open(mp3_path, 'rb').read(), format='audio/mp3')
+        audio_file = open(mp3_path, 'rb')
+        st.audio(audio_file.read(), format='audio/mp3')
+        audio_file.close()
         os.remove(mp3_path)
