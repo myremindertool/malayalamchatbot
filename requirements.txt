@@ -3,4 +3,6 @@ openai
 SpeechRecognition
 gTTS
 pydub
-streamlit-mic-recorder
+streamlit-webrtc
+av
+numpy
